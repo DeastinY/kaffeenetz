@@ -155,7 +155,8 @@ def extract_coffee_details(coffee_posts):
     logging.info("Extracting Details")
     keywords = ["Name der Bohne", "Packungsgröße", "Gemahlen und Bezogen mit",
                 "Gekauft am", "MHD", "Eigenschaften", "Geschmack", "Wieder kaufen"]
-    keywords_colon = [kw+":" for kw in keywords]
+    keywords_colon = ["Name (der Bohne)?:", "Packungsgrö(ss|ß)e:", "Gemahlen und Bezogen (mit)?:",
+                      "Gekauft (am)?:", "MHD:", "Eigenschaften:", "Geschmack:", "Wieder kaufen:"]
     re_name = re.compile(r"(?<=Name der Bohne: ).+?(?=.?("+r"|".join(keywords_colon)+r"))", re.IGNORECASE)
     re_packung = re.compile(r"(?<=Packungsgröße: ).+?(?=.?("+r"|".join(keywords_colon)+r"))", re.IGNORECASE)
     re_gerät = re.compile(r"(?<=Gemahlen und Bezogen mit: ).+?(?=.?("+r"|".join(keywords_colon)+r"))", re.IGNORECASE)
@@ -178,10 +179,12 @@ def extract_coffee_details(coffee_posts):
     errorcnt = 0
     for cp in tqdm(coffee_posts):
         text = cp["Full Post"]
+        processed = []
         for name, regex in all_re.items():
             result = regex.search(text)
             if result:
                 value = result.group()
+                processed.append(value)
                 for kw in keywords:
                     if __name__ == '__main__':
                         value = value.replace(kw, '')
@@ -190,6 +193,10 @@ def extract_coffee_details(coffee_posts):
                 errorcnt += 1
                 cp[name] = ""
                 logging.debug(f"Could not extract {name} from a post. Here it is : \n{text}")
+        unprocessed = text
+        for p in processed + keywords + [":"]:
+            unprocessed = unprocessed.replace(p, '')
+        cp["Unprocessed"] = unprocessed
     logging.info(f"Processed {len(coffee_posts)} posts with {errorcnt} extraction errors.")
     FILE_FINAL.write_text(json.dumps(coffee_posts, indent=4, ensure_ascii=False), encoding='utf-8')
     return coffee_posts
@@ -197,6 +204,6 @@ def extract_coffee_details(coffee_posts):
 
 if __name__ == '__main__':
     posts = load_processed()
-    coffee_posts = get_coffee_posts(posts, threshold=0.9)
+    coffee_posts = get_coffee_posts(posts, threshold=0.5)
     coffee_posts = extract_coffee_details(coffee_posts)
 
