@@ -1,20 +1,20 @@
-import math
+import re
 import json
-from tqdm import tqdm
 import logging
+from pathlib import Path
+
 import requests
 from lxml import html
-from pathlib import Path
-from textblob import TextBlob as tb
-from nltk.tag.stanford import StanfordNERTagger, StanfordPOSTagger
-from nltk.tokenize import sent_tokenize, word_tokenize
-from nltk.chunk import ne_chunk
 from nltk.corpus import stopwords
+from nltk.tag.stanford import StanfordNERTagger
+from nltk.tokenize import word_tokenize
+from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO)
 FILE_DATA = Path("ich_trinke_gerade.json")
 FILE_PROCESSED = Path("ich_trinke_gerade_processed.json")
-FILE_TFIDF = Path("tfidf.json")
+FILE_FINAL = Path("results.json")
+
 
 def parse_page(url):
     response = requests.get(url)
@@ -28,60 +28,27 @@ def get_posts(parsed_page):
 
 def crawl_posts():
     base_url = "https://www.kaffee-netz.de/threads/ich-trinke-gerade-diesen-espresso.19308/"
-    all_urls = [base_url] + [base_url+f"page-{i}" for i in range(1, 302)]  # last page
+    all_urls = [base_url] + [base_url + f"page-{i}" for i in range(1, 302)]  # last page
     post_data = []
     for url in tqdm(all_urls):
         parsed_page = parse_page(url)
         posts = get_posts(parsed_page)
         post_data.append(posts)
-    FILE_DATA.write_text(json.dumps(post_data, indent=4))
+    FILE_DATA.write_text(json.dumps(post_data, indent=4, ensure_ascii=False))
 
 
 def load_posts():
     logging.info("Loading post data from file")
-    posts =  json.loads(FILE_DATA.read_text(encoding="utf-8"))
+    posts = json.loads(FILE_DATA.read_text().encode('utf-8', 'ignore'))
     logging.info(f"Loaded {sum([len(p) for p in posts])} posts")
     return posts
 
 
 def load_processed():
     logging.info("Loading processed data")
-    posts = json.loads(FILE_PROCESSED.read_text(encoding="utf-8"))
+    posts = json.loads(FILE_PROCESSED.read_text().encode('utf-8', 'ignore'))
     logging.info(f"Loaded {sum([len(p) for p in posts])} posts")
     return posts
-
-
-def load_tfidf():
-    logging.info("Loading TFIDF")
-    tfidf = json.loads(FILE_TFIDF.read_text(encoding="utf-8"))
-    logging.info(f"Loaded {len(tfidf)} tfidf scores")
-    return tfidf
-
-
-def calculate_tf(word, blob):
-    return blob.words.count(word) / len(blob.words)
-
-
-def n_containing(word, bloblist):
-    return sum(1 for blob in bloblist if word in blob.words)
-
-
-def calculate_idf(word, bloblist):
-    return math.log(len(bloblist) / (1 + n_containing(word, bloblist)))
-
-
-def calculate_tfidf(word, blob, bloblist):
-    return calculate_tf(word, blob) * calculate_idf(word, bloblist)
-
-
-def get_tfidf_scores(posts):
-    scores = {}
-    bloblist = [tb(post['text']) for post in posts]
-    wordlist = [[ne[0] for ne in post['named_entities']] for post in posts]
-    for i, blob in enumerate(tqdm(bloblist)):
-        for word in wordlist[i]:
-            scores[word] = calculate_tfidf(word, blob, bloblist)
-    FILE_TFIDF.write_text(json.dumps(scores, indent=4))
 
 
 def preprocess(raw_data):
@@ -103,16 +70,16 @@ def preprocess(raw_data):
 def tokenize(posts):
     logging.info("Tokenizing")
     for post in tqdm(posts):
-        post["tokens"] = [p for p in word_tokenize(post["text"]) if not p in stopwords.words('german')]
+        post["tokens"] = [p for p in word_tokenize(post["text"]) if p not in stopwords.words('german')]
     return posts
 
 
 def pos_tag(posts):
     logging.info("Extracting POS")
-    #pos_tagger = StanfordPOSTagger(model_filename="/home/ric/stanford/models/german-ud.tagger")
-    #post = pos_tagger.tag(posts)
-    #post = [p for p in post if p[1] not in ["PUNCT"]]
-    #post = ne_chunk(post)
+    # pos_tagger = StanfordPOSTagger(model_filename="/home/ric/stanford/models/german-ud.tagger")
+    # post = pos_tagger.tag(posts)
+    # post = [p for p in post if p[1] not in ["PUNCT"]]
+    # post = ne_chunk(post)
     return posts
 
 
@@ -122,7 +89,7 @@ def extract_ner(posts):
     all_ne = set()
     for p in tqdm(posts):
         tagged = ner_tagger.tag(p["tokens"])
-        named_entities = [t for t in tagged if t[1] !='O']
+        named_entities = [t for t in tagged if t[1] != 'O']
         p['tagged'] = tagged
         p['named_entities'] = named_entities
         for n in named_entities:
@@ -138,7 +105,7 @@ def generate_processed(crawl=False):
     posts = tokenize(posts)
     posts = keyword_check(posts)
     posts, all_ne = extract_ner(posts)
-    FILE_PROCESSED.write_text(json.dumps(posts, indent=4))
+    FILE_PROCESSED.write_text(json.dumps(posts, indent=4, ensure_ascii=False))
 
 
 def get_unique_ne(posts):
@@ -150,9 +117,9 @@ def get_unique_ne(posts):
     return all_unique
 
 
-def filter_ne(posts, tfidf):
+def filter_ne(posts):
     logging.info("Filtering named entities")
-    filter_words = ['klicke']
+    filter_words = ['klicke', "bohne", "espresso", "kaffee", "mhd", "packungsgröße", ]
     for post in tqdm(posts):
         filtered = []
         for ne in post["named_entities"]:
@@ -166,7 +133,7 @@ def filter_ne(posts, tfidf):
 
 
 def keyword_check(posts):
-    keywords = ["Name", "Bohne", "Gramm", "Gemahlen" ,"Bezogen", "Gekauft", "Eigenschaften", "Wieder", "kaufen"]
+    keywords = ["Name", "Bohne", "Gramm", "Gemahlen", "Bezogen", "Gekauft", "Eigenschaften", "Wieder", "kaufen"]
     for post in posts:
         hits = [key in post["text"] for key in keywords].count(True) / len(keywords)
         post["keyword_score"] = hits
@@ -174,20 +141,62 @@ def keyword_check(posts):
 
 
 def get_coffee_posts(posts, threshold=0.9):
+    logging.info("Grouping coffee posts")
     coffee_posts = []
     for post in posts:
         if post["keyword_score"] > threshold:
             coffee_posts.append({
-                "Name": "",
-                "Keywords:": post["filtered_ne"],
                 "Full Post": post["text"]
             })
     return coffee_posts
 
 
+def extract_coffee_details(coffee_posts):
+    logging.info("Extracting Details")
+    keywords = ["Name der Bohne", "Packungsgröße", "Gemahlen und Bezogen mit",
+                "Gekauft am", "MHD", "Eigenschaften", "Geschmack", "Wieder kaufen"]
+    keywords_colon = [kw+":" for kw in keywords]
+    re_name = re.compile(r"(?<=Name der Bohne: ).+?(?=.?("+r"|".join(keywords_colon)+r"))", re.IGNORECASE)
+    re_packung = re.compile(r"(?<=Packungsgröße: ).+?(?=.?("+r"|".join(keywords_colon)+r"))", re.IGNORECASE)
+    re_gerät = re.compile(r"(?<=Gemahlen und Bezogen mit: ).+?(?=.?("+r"|".join(keywords_colon)+r"))", re.IGNORECASE)
+    re_gekauft = re.compile(r"(?<=Gekauft am: ).+?(?=.?("+r"|".join(keywords_colon)+r"))", re.IGNORECASE)
+    re_mhd = re.compile(r"(?<=MHD: ).+?(?=.?("+r"|".join(keywords_colon)+r"))", re.IGNORECASE)
+    re_eigenschaften = re.compile(r"(?<=Eigenschaften: ).+?(?=.?("+r"|".join(keywords_colon)+r"))", re.IGNORECASE)
+    re_geschmack = re.compile(r"(?<=Geschmack: ).+?(?=.?("+r"|".join(keywords_colon)+r"))", re.IGNORECASE)
+    re_wiederkaufen = re.compile(r"(?<=Wieder kaufen: ).+", re.IGNORECASE)
+    all_re = {
+        "Name": re_name,
+        "Packungsgröße": re_packung,
+        "Maschine": re_gerät,
+        "Gekauft am": re_gekauft,
+        "MHD": re_mhd,
+        "Eigenschaften": re_eigenschaften,
+        "Geschmack": re_geschmack,
+        "Wiederkaufen": re_wiederkaufen
+    }
+
+    errorcnt = 0
+    for cp in tqdm(coffee_posts):
+        text = cp["Full Post"]
+        for name, regex in all_re.items():
+            result = regex.search(text)
+            if result:
+                value = result.group()
+                for kw in keywords:
+                    if __name__ == '__main__':
+                        value = value.replace(kw, '')
+                cp[name] = value.strip()
+            else:
+                errorcnt += 1
+                cp[name] = ""
+                logging.debug(f"Could not extract {name} from a post. Here it is : \n{text}")
+    logging.info(f"Processed {len(coffee_posts)} posts with {errorcnt} extraction errors.")
+    FILE_FINAL.write_text(json.dumps(coffee_posts, indent=4, ensure_ascii=False), encoding='utf-8')
+    return coffee_posts
+
+
 if __name__ == '__main__':
     posts = load_processed()
-    coffee_posts = get_coffee_posts(posts)
-    print(json.dumps(coffee_posts, indent=4))
-    print(len(coffee_posts))
+    coffee_posts = get_coffee_posts(posts, threshold=0.9)
+    coffee_posts = extract_coffee_details(coffee_posts)
 
